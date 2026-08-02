@@ -1,0 +1,25 @@
+# TripTunes dependencies
+
+# --- Web backend ---
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic[email]
+python-jose[cryptography]
+bcrypt
+python-multipart
+
+# --- AI assistant (LangChain) ---
+# chatbot.py auto-detects the agent API, so either major version works:
+#   LangChain 1.x  -> uses create_agent
+#   LangChain 0.x  -> uses AgentExecutor
+# If you're on 1.x and want the older AgentExecutor path instead,
+# also install langchain-classic.
+langchain
+langchain-core
+
+# --- LLM provider: install ONE of these (see AI_SETUP.md) ---
+langchain-google-genai     # Gemini  - free tier, the default
+# langchain-groq           # Groq    - free tier, very fast
+# langchain-ollama         # Ollama  - fully local, no API key
+# langchain-openai         # OpenAI  - paid

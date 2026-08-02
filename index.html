@@ -1,0 +1,1802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>TripTunes</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1117">
+
+<!-- Leaflet: free interactive maps over OpenStreetMap tiles (no API key) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg-soft: #161922;
+    --card: #1c2029;
+    --card-hi: #232834;
+    --border: #2b303c;
+    --text-primary: #eef1f6;
+    --text-secondary: #99a1b0;
+
+    /* one accent per screen */
+    --c-route: #38bdf8;   /* sky */
+    --c-trip: #a78bfa;    /* violet */
+    --c-activities: #34d399; /* emerald */
+    --c-music: #f472b6;   /* rose */
+    --c-ai: #fbbf24;      /* amber */
+    --c-home: #5eead4;    /* teal */
+
+    --accent: var(--c-route); /* current-screen accent, swapped by JS */
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #06070a;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* On desktop: center a tall phone-shaped frame on the dark backdrop.
+     On an actual phone (narrow screen): fill the whole viewport, no frame. */
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+
+  #app-frame {
+    width: 390px;
+    height: 100vh;             /* fallback */
+    height: 844px;             /* iPhone-ish tall phone shape on desktop */
+    max-height: 100vh;         /* never taller than the window */
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    border-radius: 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.55);
+    border: 1px solid #1a1d26;
+  }
+
+  /* Real phones / narrow screens: drop the frame, fill the screen edge to edge. */
+  @media (max-width: 430px) {
+    #app-frame {
+      width: 100vw;
+      height: 100vh;
+      max-height: none;
+      border-radius: 0;
+      border: none;
+      box-shadow: none;
+    }
+  }
+
+  /* ---------- Top bar ---------- */
+  #top-bar {
+    height: 48px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  #top-bar .logo-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent);
+    transition: background 220ms ease;
+    box-shadow: 0 0 10px var(--accent);
+  }
+  #top-bar span { color: var(--text-primary); font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+
+  /* ---------- Screens ---------- */
+  #screen-stack { flex: 1; position: relative; overflow: hidden; }
+  .screen {
+    position: absolute; inset: 0;
+    padding: 18px 18px 8px;
+    opacity: 0; pointer-events: none;
+    transform: translateY(8px);
+    transition: opacity 200ms ease, transform 200ms ease;
+    overflow-y: auto;
+  }
+  .screen.active { opacity: 1; pointer-events: auto; transform: translateY(0); }
+  .screen h1 { color: var(--text-primary); font-size: 21px; font-weight: 700; margin: 4px 0 2px; }
+  .screen .eyebrow { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; line-height: 1.55; white-space: pre-line; }
+
+  /* ---------- Illustration card ---------- */
+  .illus-card {
+    position: relative;
+    width: 100%; height: 168px;
+    margin: 14px 0 16px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: linear-gradient(160deg, var(--bg-soft), #0c0e14);
+    border: 1px solid var(--border);
+  }
+  .illus-card svg { width: 100%; height: 100%; display: block; }
+
+  /* ---------- Leaflet route map ---------- */
+  .map-wrap { position: relative; width: 100%; margin: 14px 0 16px; }
+  #route-map {
+    width: 100%; height: 360px;
+    border-radius: 16px; overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-soft);
+    z-index: 1;
+  }
+  /* Tone the OSM tiles down to match the dark UI. */
+  #route-map .leaflet-tile-pane { filter: brightness(.75) saturate(.85) contrast(1.05); }
+  .leaflet-container { background: #0b141c; font: inherit; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--card-hi); color: var(--text-primary); }
+  .leaflet-popup-content { font-size: 12.5px; margin: 8px 12px; }
+  .map-locate {
+    position: absolute; top: 10px; right: 10px; z-index: 500;
+    background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+    font-family: inherit; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.35);
+  }
+  .map-locate:hover { border-color: var(--c-route); }
+
+  /* ---------- Place search (autocomplete) ---------- */
+  .place-field { position: relative; }
+  .place-field input {
+    width: 100%;
+    background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 11px 13px; font-size: 13px; font-family: inherit;
+    margin-bottom: 6px;
+  }
+  .place-field input:focus { outline: none; border-color: var(--c-route); }
+  .place-suggest {
+    display: none; position: absolute; z-index: 600;
+    top: calc(100% - 4px); left: 0; right: 0;
+    background: var(--card-hi); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; max-height: 220px; overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .place-suggest.open { display: block; }
+  .place-suggest .ps-item {
+    padding: 9px 12px; font-size: 12.5px; cursor: pointer;
+    border-bottom: 1px solid var(--border); color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .place-suggest .ps-item:last-child { border-bottom: none; }
+  .place-suggest .ps-item:hover { background: var(--card); color: var(--c-route); }
+  .place-suggest .ps-empty { padding: 9px 12px; font-size: 12px; color: var(--text-secondary); }
+
+  /* ---------- Controls ---------- */
+  .field-label { color: var(--text-secondary); font-size: 11px; font-weight: 600; margin: 8px 2px 4px; letter-spacing: .3px; }
+  select, .btn {
+    width: 100%;
+    background: var(--card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 13px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  select { margin-bottom: 6px; }
+  select:hover { border-color: var(--accent); }
+
+  .button-row { display: flex; gap: 8px; margin-top: 10px; }
+  .btn { cursor: pointer; font-weight: 600; transition: transform 90ms ease, border-color 160ms ease, background 160ms ease; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:active { transform: scale(.97); }
+  .btn.primary { background: var(--accent); color: #06070a; border: none; }
+  .btn.primary:hover { filter: brightness(1.08); }
+
+  .result-card {
+    margin-top: 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-line;
+    min-height: 20px;
+  }
+
+  /* ---------- AI chat ---------- */
+  /* The AI screen is a column: header, scrolling log, pinned input bar. */
+  #screen-ai { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 14px; }
+  #screen-ai.active { display: flex; }
+
+  .chat-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .trippy-id { display: flex; align-items: center; gap: 11px; }
+  .trippy-id h1 { margin: 0; font-size: 20px; }
+  .trippy-status { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 11.5px; margin-top: 1px; }
+  .trippy-dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 7px #34d399; animation: trippyPulse 1.8s ease-in-out infinite; }
+  @keyframes trippyPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* Trippy's little character - pure CSS, gently bobs and blinks. */
+  .trippy-face {
+    position: relative; flex-shrink: 0;
+    width: 42px; height: 42px; border-radius: 14px;
+    background: linear-gradient(150deg, #fbbf24, #f59e0b);
+    box-shadow: 0 4px 14px rgba(251,191,36,.35);
+    animation: trippyBob 3s ease-in-out infinite;
+  }
+  .trippy-face.big { width: 84px; height: 84px; border-radius: 26px; margin-bottom: 4px; }
+  .trippy-ear { position: absolute; top: -6px; width: 14px; height: 14px; background: linear-gradient(150deg, #fbbf24, #f59e0b); border-radius: 5px; }
+  .trippy-face.big .trippy-ear { width: 26px; height: 26px; top: -11px; border-radius: 9px; }
+  .trippy-ear.l { left: 5px; transform: rotate(-18deg); }
+  .trippy-ear.r { right: 5px; transform: rotate(18deg); }
+  .trippy-face.big .trippy-ear.l { left: 10px; }
+  .trippy-face.big .trippy-ear.r { right: 10px; }
+  .trippy-eye { position: absolute; top: 16px; width: 6px; height: 6px; background: #1a1405; border-radius: 50%; animation: trippyBlink 4s infinite; }
+  .trippy-face.big .trippy-eye { width: 11px; height: 11px; top: 32px; }
+  .trippy-eye.l { left: 12px; }
+  .trippy-eye.r { right: 12px; }
+  .trippy-face.big .trippy-eye.l { left: 24px; }
+  .trippy-face.big .trippy-eye.r { right: 24px; }
+  .trippy-smile { position: absolute; bottom: 9px; left: 50%; transform: translateX(-50%); width: 16px; height: 8px; border: 2px solid #1a1405; border-top: none; border-radius: 0 0 12px 12px; }
+  .trippy-face.big .trippy-smile { width: 32px; height: 15px; bottom: 17px; border-width: 3px; }
+  @keyframes trippyBob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-5px) rotate(2deg); } }
+  @keyframes trippyBlink { 0%,92%,100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+
+  .chat-hello { color: var(--c-ai); font-size: 17px; font-weight: 800; margin: 2px 0 0; }
+
+  .chat-reset {
+    flex-shrink: 0; margin-top: 0;
+    background: var(--card); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 12px; font-size: 11px; font-weight: 600;
+    font-family: inherit; cursor: pointer;
+  }
+  .chat-reset:hover { color: var(--text-primary); border-color: var(--c-ai); }
+
+  .chat-setup {
+    margin-top: 10px; padding: 10px 12px;
+    background: #241d09; border: 1px solid #4a3c12; border-radius: 12px;
+    color: #f3d68a; font-size: 12px; line-height: 1.5;
+  }
+
+  .chat-log {
+    flex: 1; overflow-y: auto;
+    margin: 12px 0 10px;
+    display: flex; flex-direction: column; gap: 10px;
+    scroll-behavior: smooth;
+  }
+
+  .chat-empty { margin: auto 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .chat-spark { width: 34px; height: 34px; opacity: .9; }
+
+  .chat-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px; }
+  .chip {
+    background: var(--card); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 7px 12px; font-size: 11.5px; font-family: inherit;
+    cursor: pointer; text-align: left; line-height: 1.3;
+    transition: border-color 160ms ease, color 160ms ease;
+  }
+  .chip:hover { border-color: var(--c-ai); color: var(--text-primary); }
+
+  .msg { max-width: 86%; padding: 10px 13px; border-radius: 15px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--c-ai); color: #1a1405; border-bottom-right-radius: 5px; font-weight: 500; }
+  .msg.bot  { align-self: flex-start; background: var(--card); color: var(--text-primary); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+  .msg.error { align-self: flex-start; background: #2b1416; border: 1px solid #5c2328; color: #f5a9ae; }
+
+  /* Shows which of your algorithms the model actually called. */
+  .msg-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+  .msg-tool {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    color: var(--c-ai); background: #241d09;
+    border: 1px solid #4a3c12; border-radius: 5px; padding: 2px 6px;
+  }
+
+  .typing { display: flex; gap: 4px; align-items: center; padding: 13px; }
+  .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-secondary); animation: blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .2s; }
+  .typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+
+  .chat-bar { flex-shrink: 0; display: flex; gap: 8px; align-items: flex-end; }
+  #chat-input {
+    flex: 1; resize: none; max-height: 110px;
+    background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 11px 13px; font-size: 13px; font-family: inherit; line-height: 1.45;
+  }
+  #chat-input:focus { outline: none; border-color: var(--c-ai); }
+  .chat-send {
+    flex-shrink: 0; width: 42px; height: 42px;
+    background: var(--c-ai); color: #1a1405;
+    border: none; border-radius: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 90ms ease, filter 160ms ease;
+  }
+  .chat-send svg { width: 19px; height: 19px; }
+  .chat-send:hover { filter: brightness(1.08); }
+  .chat-send:active { transform: scale(.94); }
+  .chat-send:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---------- Bottom nav ---------- */
+  #bottom-nav {
+    height: 66px; flex-shrink: 0;
+    display: flex;
+    background: var(--bg-soft);
+    border-top: 1px solid var(--border);
+    padding: 7px 6px; gap: 2px;
+  }
+  .nav-btn {
+    flex: 1; background: none; border: none;
+    color: var(--text-secondary);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    border-radius: 12px; cursor: pointer; padding: 4px 0;
+    font-size: 10px; font-weight: 600; font-family: inherit;
+    transition: color 160ms ease, background 160ms ease;
+  }
+  .nav-btn svg { width: 21px; height: 21px; fill: none; stroke: var(--text-secondary); stroke-width: 1.8; transition: stroke 160ms ease; }
+  .nav-btn:hover { color: var(--text-primary); }
+  .nav-btn.active[data-c="home"]       { color: var(--c-home); background: #0c2420; }
+  .nav-btn.active[data-c="route"]      { color: var(--c-route); background: #0e1f2b; }
+  .nav-btn.active[data-c="trip"]       { color: var(--c-trip); background: #1a152b; }
+  .nav-btn.active[data-c="activities"] { color: var(--c-activities); background: #0f2320; }
+  .nav-btn.active[data-c="music"]      { color: var(--c-music); background: #2a1420; }
+  .nav-btn.active[data-c="ai"]         { color: var(--c-ai); background: #29220f; }
+  .nav-btn.active[data-c="home"] svg       { stroke: var(--c-home); }
+  .nav-btn.active[data-c="route"] svg      { stroke: var(--c-route); }
+  .nav-btn.active[data-c="trip"] svg       { stroke: var(--c-trip); }
+  .nav-btn.active[data-c="activities"] svg { stroke: var(--c-activities); }
+  .nav-btn.active[data-c="music"] svg      { stroke: var(--c-music); }
+  .nav-btn.active[data-c="ai"] svg         { stroke: var(--c-ai); }
+
+  /* ---------- Auth overlay ---------- */
+  #auth-overlay {
+    position: absolute; inset: 0; z-index: 50;
+    background: var(--bg);
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 32px 26px;
+  }
+  #auth-overlay.hidden { display: none; }
+  #auth-overlay .brand { display:flex; align-items:center; gap:10px; margin-bottom: 6px; }
+  #auth-overlay .brand .logo-dot { width:12px; height:12px; border-radius:50%; background:var(--c-route); box-shadow:0 0 12px var(--c-route); }
+  #auth-overlay .brand span { color: var(--text-primary); font-size: 22px; font-weight: 800; }
+  #auth-overlay .tagline { color: var(--text-secondary); font-size: 13px; margin-bottom: 26px; }
+  #auth-overlay h2 { color: var(--text-primary); font-size: 17px; margin: 0 0 14px; }
+  #auth-overlay input {
+    width: 100%; background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 13px; font-size: 14px; margin-bottom: 10px; font-family: inherit;
+  }
+  #auth-overlay input:focus { outline: none; border-color: var(--c-route); }
+  #auth-overlay .auth-submit {
+    width: 100%; background: var(--c-route); color: #06070a; border: none;
+    border-radius: 12px; padding: 13px; font-size: 14px; font-weight: 700;
+    cursor: pointer; margin-top: 4px; font-family: inherit;
+  }
+  #auth-overlay .auth-submit:active { transform: scale(.98); }
+  #auth-overlay .toggle { color: var(--text-secondary); font-size: 13px; text-align: center; margin-top: 18px; }
+  #auth-overlay .toggle a { color: var(--c-route); cursor: pointer; font-weight: 600; }
+  #auth-overlay .auth-error { color: #f87171; font-size: 12.5px; min-height: 16px; margin: 2px 2px 8px; }
+
+
+  /* ---------- Trip screen ---------- */
+  .trip-list-item {
+    background: var(--card); border: 1px solid var(--border);
+    border-left: 3px solid var(--c-trip); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+    transition: border-color 140ms ease, background 140ms ease;
+  }
+  .trip-list-item:hover { background: var(--card-hi); }
+  .trip-list-item .t-name { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+  .trip-list-item .t-meta { color: var(--text-secondary); font-size: 12px; margin-top: 3px; }
+
+  .trip-input {
+    width: 100%; background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-size: 13px; margin-bottom: 8px; font-family: inherit;
+  }
+  .trip-input:focus { outline: none; border-color: var(--c-trip); }
+  .trip-btn {
+    background: var(--c-trip); color: #06070a; border: none; border-radius: 10px;
+    padding: 11px; font-size: 13px; font-weight: 700; cursor: pointer;
+    width: 100%; font-family: inherit;
+  }
+  .trip-btn.ghost { background: transparent; color: var(--c-trip); border: 1px solid var(--border); font-weight: 600; }
+  .trip-btn:active { transform: scale(.98); }
+
+  .trip-section-label { color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; margin: 16px 2px 8px; }
+
+  .day-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+  .day-card .d-head { color: var(--c-trip); font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .act-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); }
+  .act-row:first-of-type { border-top: none; }
+  .act-row .a-name { color: var(--text-primary); font-size: 13px; }
+  .act-row .a-meta { color: var(--text-secondary); font-size: 11px; }
+  .act-row .a-del { color: #f87171; cursor: pointer; font-size: 15px; background: none; border: none; padding: 0 4px; }
+  .act-empty { color: var(--text-secondary); font-size: 12px; font-style: italic; }
+
+  .trip-totals { display: flex; gap: 10px; margin: 4px 0 14px; }
+  .trip-totals .tot { flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .trip-totals .tot .lbl { color: var(--text-secondary); font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .trip-totals .tot .val { color: var(--text-primary); font-size: 15px; font-weight: 700; margin-top: 2px; }
+
+  .add-act-box { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 6px; }
+  .add-act-box .row2 { display: flex; gap: 8px; }
+  .add-act-box .row2 .trip-input { margin-bottom: 8px; }
+  .trip-error { color: #f87171; font-size: 12px; min-height: 15px; margin: 2px; }
+
+
+  /* ---------- Activities screen ---------- */
+  .act-mode-row { display: flex; gap: 6px; margin: 12px 0 6px; }
+  .act-mode { flex: 1; background: var(--card); color: var(--text-secondary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 4px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .act-mode.active { background: #0f2320; color: var(--c-activities); border-color: var(--c-activities); }
+  .act-input { width: 100%; background: var(--card); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px; font-family: inherit; }
+  .act-input:focus { outline: none; border-color: var(--c-activities); }
+  .act-run { width: 100%; background: var(--c-activities); color: #06070a; border: none; border-radius: 10px;
+    padding: 11px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .act-run:active { transform: scale(.98); }
+  .act-card { background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--c-activities);
+    border-radius: 12px; padding: 11px 13px; margin-bottom: 8px; }
+  .act-card .ac-name { color: var(--text-primary); font-size: 13.5px; font-weight: 600; }
+  .act-card .ac-meta { color: var(--text-secondary); font-size: 11.5px; margin-top: 3px; }
+  .act-summary { display: flex; gap: 8px; margin: 6px 0 12px; }
+  .act-summary .s { flex: 1; background: #0f2320; border: 1px solid #1c3b31; border-radius: 10px; padding: 9px; text-align: center; }
+  .act-summary .s .l { color: var(--text-secondary); font-size: 10px; text-transform: uppercase; }
+  .act-summary .s .v { color: var(--c-activities); font-size: 15px; font-weight: 700; margin-top: 2px; }
+
+
+  /* ---------- Music screen ---------- */
+  .mus-mode-row { display: flex; gap: 6px; margin: 12px 0 6px; }
+  .mus-mode { flex: 1; background: var(--card); color: var(--text-secondary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 4px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .mus-mode.active { background: #2a1420; color: var(--c-music); border-color: var(--c-music); }
+  .mus-input, .mus-select { width: 100%; background: var(--card); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px; font-family: inherit; }
+  .mus-input:focus, .mus-select:focus { outline: none; border-color: var(--c-music); }
+  .mus-run { width: 100%; background: var(--c-music); color: #06070a; border: none; border-radius: 10px;
+    padding: 11px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .mus-run:active { transform: scale(.98); }
+  .song-card { display: flex; justify-content: space-between; align-items: center;
+    background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--c-music);
+    border-radius: 12px; padding: 10px 13px; margin-bottom: 7px; }
+  .song-card .s-name { color: var(--text-primary); font-size: 13.5px; font-weight: 600; }
+  .song-card .s-meta { color: var(--text-secondary); font-size: 11.5px; margin-top: 2px; }
+  .song-card .s-rate { color: var(--c-music); font-size: 12.5px; font-weight: 700; white-space: nowrap; margin-left: 8px; }
+  .mus-count { color: var(--text-secondary); font-size: 12px; margin: 2px 2px 10px; }
+
+
+  /* ---------- Frequency / play button ---------- */
+  .song-card .s-actions { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+  .play-btn { background: #2a1420; color: var(--c-music); border: 1px solid var(--c-music);
+    border-radius: 50%; width: 30px; height: 30px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; justify-content: center; padding: 0; }
+  .play-btn:active { transform: scale(.9); }
+  .play-count { color: var(--text-secondary); font-size: 11px; min-width: 34px; text-align: right; }
+  .mus-reset { width: 100%; background: transparent; color: #f87171; border: 1px solid #3a2020;
+    border-radius: 10px; padding: 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: inherit; margin-bottom: 10px; }
+
+
+  .move-sel { background: var(--card); color: var(--text-secondary); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 11px; padding: 3px 4px; font-family: inherit; cursor: pointer; }
+
+
+  /* ---------- Auth hero (animated) ---------- */
+  #auth-overlay { padding: 0; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
+  .hero-route { position: absolute; top: 6%; left: 0; width: 100%; height: 60%; opacity: .7; }
+  #heroPath { stroke-dashoffset: 0; animation: dash 3s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -140; } }
+
+  .blob { position: absolute; border-radius: 50%; filter: blur(48px); opacity: .35; animation: floatBlob 9s ease-in-out infinite; }
+  .blob.b1 { width: 200px; height: 200px; background: #38bdf8; top: -40px; left: -50px; }
+  .blob.b2 { width: 220px; height: 220px; background: #f472b6; bottom: 40px; right: -70px; animation-delay: -3s; }
+  .blob.b3 { width: 160px; height: 160px; background: #a78bfa; top: 40%; left: 30%; animation-delay: -6s; }
+  @keyframes floatBlob { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(20px,-24px) scale(1.12); } }
+
+  .float { position: absolute; font-size: 22px; opacity: .0; animation: drift 7s ease-in-out infinite; }
+  .float.f1 { top: 14%; left: 16%; animation-delay: 0s; }
+  .float.f2 { top: 22%; right: 18%; animation-delay: 1.1s; font-size: 26px; }
+  .float.f3 { top: 40%; left: 10%; animation-delay: 2.2s; font-size: 28px; }
+  .float.f4 { top: 34%; right: 12%; animation-delay: 3s; }
+  .float.f5 { top: 8%;  right: 30%; animation-delay: 1.7s; font-size: 24px; }
+  .float.f6 { top: 46%; right: 34%; animation-delay: 2.6s; font-size: 18px; }
+  @keyframes drift {
+    0%   { opacity: 0; transform: translateY(10px); }
+    25%  { opacity: .85; }
+    50%  { opacity: .85; transform: translateY(-14px); }
+    75%  { opacity: .5; }
+    100% { opacity: 0; transform: translateY(-28px); }
+  }
+
+  .auth-content { position: relative; z-index: 2; padding: 0 28px;
+    height: 100%; display: flex; flex-direction: column; justify-content: flex-end; padding-bottom: 46px; }
+  .auth-content .brand span { font-size: 26px; }
+  .auth-content .tagline { font-size: 13.5px; margin-bottom: 30px; }
+  .auth-content h2 { margin-bottom: 14px; }
+
+  /* the input/button styles already exist from before; just ensure spacing */
+  #auth-overlay input { position: relative; z-index: 2; }
+  .auth-submit {
+    background: linear-gradient(90deg, #38bdf8, #a78bfa, #f472b6) !important;
+    background-size: 200% 100% !important;
+    animation: shiftGrad 4s ease infinite;
+  }
+  @keyframes shiftGrad { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+  /* ---------- Welcome / home hero (after login) ---------- */
+  #screen-home .welcome-hero {
+    position: relative; border-radius: 18px; overflow: hidden;
+    padding: 26px 20px; margin-bottom: 16px;
+    background: linear-gradient(150deg, #10131c, #0b0d14);
+    border: 1px solid var(--border);
+  }
+  #screen-home .welcome-hero .wh-blob { position: absolute; border-radius: 50%; filter: blur(40px); opacity: .4; }
+  #screen-home .welcome-hero .wh-blob.a { width: 130px; height: 130px; background: #38bdf8; top: -30px; right: -20px; }
+  #screen-home .welcome-hero .wh-blob.b { width: 120px; height: 120px; background: #f472b6; bottom: -40px; left: -20px; }
+  #screen-home .wh-hi { position: relative; z-index: 2; color: var(--text-primary); font-size: 22px; font-weight: 800; }
+  #screen-home .wh-sub { position: relative; z-index: 2; color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+  #screen-home .wh-logout {
+    position: absolute; top: 14px; right: 14px; z-index: 3;
+    background: rgba(0,0,0,.28); color: var(--text-primary);
+    border: 1px solid rgba(255,255,255,.18); border-radius: 999px;
+    padding: 6px 13px; font-size: 11.5px; font-weight: 600;
+    font-family: inherit; cursor: pointer; backdrop-filter: blur(4px);
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+  #screen-home .wh-logout:hover { background: rgba(0,0,0,.42); border-color: rgba(255,255,255,.4); }
+  .home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .home-tile {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 14px; cursor: pointer; transition: transform 120ms ease, border-color 140ms ease;
+  }
+  .home-tile:hover { transform: translateY(-2px); }
+  .home-tile .ht-ico { font-size: 24px; }
+  .home-tile .ht-name { color: var(--text-primary); font-size: 14px; font-weight: 700; margin-top: 8px; }
+  .home-tile .ht-desc { color: var(--text-secondary); font-size: 11.5px; margin-top: 2px; line-height: 1.4; }
+  .home-tile.route { border-left: 3px solid var(--c-route); }
+  .home-tile.trip { border-left: 3px solid var(--c-trip); }
+  .home-tile.activities { border-left: 3px solid var(--c-activities); }
+  .home-tile.music { border-left: 3px solid var(--c-music); }
+
+</style>
+</head>
+<body>
+
+<div id="app-frame">
+
+  <!-- ============ AUTH OVERLAY ============ -->
+  <div id="auth-overlay">
+    <div class="hero-bg">
+      <!-- animated route line -->
+      <svg class="hero-route" viewBox="0 0 390 300" preserveAspectRatio="none">
+        <path id="heroPath" d="M30 240 C120 180, 90 100, 200 110 S320 60, 360 40"
+              fill="none" stroke="url(#heroGrad)" stroke-width="2.5" stroke-linecap="round"
+              stroke-dasharray="6 8"/>
+        <defs>
+          <linearGradient id="heroGrad" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" stop-color="#38bdf8"/>
+            <stop offset="0.5" stop-color="#a78bfa"/>
+            <stop offset="1" stop-color="#f472b6"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <!-- drifting floating icons -->
+      <div class="float f1">📍</div>
+      <div class="float f2">🎵</div>
+      <div class="float f3">✈️</div>
+      <div class="float f4">🎧</div>
+      <div class="float f5">🗺️</div>
+      <div class="float f6">⭐</div>
+      <!-- glowing blobs -->
+      <div class="blob b1"></div>
+      <div class="blob b2"></div>
+      <div class="blob b3"></div>
+    </div>
+
+    <div class="auth-content">
+      <div class="brand"><div class="logo-dot"></div><span>TripTunes</span></div>
+      <div class="tagline">Plan the journey. Score the soundtrack.</div>
+
+      <h2 id="auth-heading">Log in</h2>
+      <div class="auth-error" id="auth-error"></div>
+      <input type="text" id="auth-name" placeholder="Username" autocomplete="username" style="display:none;">
+      <input type="email" id="auth-email" placeholder="Email" autocomplete="email">
+      <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+      <button class="auth-submit" id="auth-submit" onclick="submitAuth()">Log in</button>
+
+      <div class="toggle" id="auth-toggle">
+        New here? <a onclick="toggleAuthMode()">Create an account</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="screen-stack">
+
+    <!-- ============ HOME ============ -->
+    <section class="screen active" id="screen-home">
+      <div class="welcome-hero">
+        <div class="wh-blob a"></div>
+        <div class="wh-blob b"></div>
+        <div class="wh-hi" id="welcome-name">Welcome back 👋</div>
+        <div class="wh-sub">Where are we headed today?</div>
+        <button class="wh-logout" onclick="logout()">Log out</button>
+      </div>
+      <div class="home-grid">
+        <div class="home-tile route" onclick="navigate('route')">
+          <div class="ht-ico">🗺️</div><div class="ht-name">Plan a route</div>
+          <div class="ht-desc">Shortest, cheapest or fastest path.</div>
+        </div>
+        <div class="home-tile trip" onclick="navigate('trip')">
+          <div class="ht-ico">📅</div><div class="ht-name">Build a trip</div>
+          <div class="ht-desc">Day-by-day itinerary, saved to you.</div>
+        </div>
+        <div class="home-tile activities" onclick="navigate('activities')">
+          <div class="ht-ico">⭐</div><div class="ht-name">Find activities</div>
+          <div class="ht-desc">Optimise for budget & time.</div>
+        </div>
+        <div class="home-tile music" onclick="navigate('music')">
+          <div class="ht-ico">🎧</div><div class="ht-name">Make a playlist</div>
+          <div class="ht-desc">Soundtrack for the journey.</div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ============ ROUTE ============ -->
+    <section class="screen" id="screen-route">
+      <div class="eyebrow">Plan a journey</div>
+      <h1>Route planner</h1>
+
+      <div class="map-wrap">
+        <div id="route-map"></div>
+        <button class="map-locate" onclick="locateMe()" title="Show my location">📍 Locate me</button>
+      </div>
+
+      <div class="field-label">FROM</div>
+      <div class="place-field">
+        <input type="text" id="source-input" placeholder="Any city or town…" autocomplete="off"
+               oninput="onPlaceInput('source')" onfocus="onPlaceInput('source')">
+        <div class="place-suggest" id="source-suggest"></div>
+      </div>
+
+      <div class="field-label">TO</div>
+      <div class="place-field">
+        <input type="text" id="destination-input" placeholder="Any city or town…" autocomplete="off"
+               oninput="onPlaceInput('destination')" onfocus="onPlaceInput('destination')">
+        <div class="place-suggest" id="destination-suggest"></div>
+      </div>
+
+      <div class="button-row">
+        <button class="btn primary" onclick="showPath()">Find route</button>
+        <button class="btn" onclick="swapPlaces()" title="Swap">⇄ Swap</button>
+      </div>
+
+      <div class="result-card" id="route-result">Type a start and destination, then Find route.</div>
+    </section>
+
+    <!-- ============ TRIP ============ -->
+    <section class="screen" id="screen-trip">
+      <div class="eyebrow">Your itinerary</div>
+      <h1 id="trip-title">Trip</h1>
+      <div id="trip-body"><!-- filled by JS: either the trip list or an open trip --></div>
+    </section>
+
+    <!-- ============ ACTIVITIES ============ -->
+    <section class="screen" id="screen-activities">
+      <div class="eyebrow">Explore & optimise</div>
+      <h1>Activities</h1>
+
+      <div class="field-label">CITY — type any city</div>
+      <input class="act-input" id="act-city" list="act-city-list" placeholder="e.g. Udaipur, Kochi, Shimla…" autocomplete="off">
+      <datalist id="act-city-list"></datalist>
+
+      <div class="act-mode-row">
+        <button class="act-mode active" data-mode="browse" onclick="setActMode('browse')">Browse</button>
+        <button class="act-mode" data-mode="filter" onclick="setActMode('filter')">Filter</button>
+        <button class="act-mode" data-mode="budget" onclick="setActMode('budget')">Budget</button>
+        <button class="act-mode" data-mode="schedule" onclick="setActMode('schedule')">Schedule</button>
+      </div>
+
+      <div id="act-controls"></div>
+      <div class="trip-error" id="act-error"></div>
+      <div id="act-results"></div>
+    </section>
+
+    <!-- ============ MUSIC ============ -->
+    <section class="screen" id="screen-music">
+      <div class="eyebrow">Soundtrack your trip</div>
+      <h1>Music</h1>
+
+      <div class="mus-mode-row">
+        <button class="mus-mode active" data-mode="search" onclick="setMusMode('search')">Search</button>
+        <button class="mus-mode" data-mode="playlist" onclick="setMusMode('playlist')">Playlist</button>
+        <button class="mus-mode" data-mode="played" onclick="setMusMode('played')">Top played</button>
+      </div>
+
+      <div id="mus-controls"></div>
+      <div class="trip-error" id="mus-error"></div>
+      <div id="mus-results"></div>
+    </section>
+
+    <!-- ============ AI ============ -->
+    <section class="screen" id="screen-ai">
+      <div class="chat-head">
+        <div class="trippy-id">
+          <div class="trippy-face">
+            <div class="trippy-ear l"></div>
+            <div class="trippy-ear r"></div>
+            <div class="trippy-eye l"></div>
+            <div class="trippy-eye r"></div>
+            <div class="trippy-smile"></div>
+          </div>
+          <div>
+            <h1>Trippy</h1>
+            <div class="trippy-status"><span class="trippy-dot"></span>your travel &amp; music buddy</div>
+          </div>
+        </div>
+        <button class="chat-reset" onclick="chatReset()" title="Clear conversation">Clear</button>
+      </div>
+
+      <div id="chat-setup" class="chat-setup" style="display:none;"></div>
+
+      <div id="chat-log" class="chat-log">
+        <div class="chat-empty">
+          <div class="trippy-face big">
+            <div class="trippy-ear l"></div>
+            <div class="trippy-ear r"></div>
+            <div class="trippy-eye l"></div>
+            <div class="trippy-eye r"></div>
+            <div class="trippy-smile"></div>
+          </div>
+          <p class="chat-hello">Hi, I'm Trippy! ✨</p>
+          <p class="subtitle" style="text-align:center;">I plan trips and build playlists using your real TripTunes data. Try one of these:</p>
+          <div class="chat-chips">
+            <button class="chip" onclick="chatSuggest(this)">🗺️ Plan a day in Jaipur, 6 hours and 300 rupees</button>
+            <button class="chip" onclick="chatSuggest(this)">🚕 Cheapest way from Delhi to Goa</button>
+            <button class="chip" onclick="chatSuggest(this)">🎧 Playlist for a 3 hour drive</button>
+            <button class="chip" onclick="chatSuggest(this)">⭐ What can I do in Agra?</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-bar">
+        <textarea id="chat-input" rows="1" placeholder="Ask about trips, routes or music..."
+                  oninput="chatGrow(this)" onkeydown="chatKey(event)"></textarea>
+        <button id="chat-send" class="chat-send" onclick="chatSend()" aria-label="Send">
+          <svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </section>
+
+  </div>
+
+  <nav id="bottom-nav">
+    <button class="nav-btn active" data-screen="home" data-c="home" onclick="navigate('home')">
+      <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+      <span>Home</span>
+    </button>
+    <button class="nav-btn" data-screen="route" data-c="route" onclick="navigate('route')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="3"/><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7Z"/></svg>
+      <span>Route</span>
+    </button>
+    <button class="nav-btn" data-screen="trip" data-c="trip" onclick="navigate('trip')">
+      <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg>
+      <span>Trip</span>
+    </button>
+    <button class="nav-btn" data-screen="activities" data-c="activities" onclick="navigate('activities')">
+      <svg viewBox="0 0 24 24"><path d="M12 3l2.5 6.5L21 10l-5 4.2L17.5 21 12 17.3 6.5 21 8 14.2 3 10l6.5-.5Z"/></svg>
+      <span>Activities</span>
+    </button>
+    <button class="nav-btn" data-screen="music" data-c="music" onclick="navigate('music')">
+      <svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M9 18V6l12-2v12"/></svg>
+      <span>Music</span>
+    </button>
+    <button class="nav-btn" data-screen="ai" data-c="ai" onclick="navigate('ai')">
+      <svg viewBox="0 0 24 24"><path d="M12 3c1 5 3 7 8 8-5 1-7 3-8 8-1-5-3-7-8-8 5-1 7-3 8-8Z"/></svg>
+      <span>AI</span>
+    </button>
+  </nav>
+
+</div>
+
+<script>
+  const ACCENTS = {
+    home: 'var(--c-home)', route: 'var(--c-route)', trip: 'var(--c-trip)', activities: 'var(--c-activities)',
+    music: 'var(--c-music)', ai: 'var(--c-ai)'
+  };
+
+  function navigate(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('screen-' + name).classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.nav-btn[data-screen="${name}"]`).classList.add('active');
+    // swap the "current accent" so top-bar dot + result card follow the screen
+    document.documentElement.style.setProperty('--accent', ACCENTS[name]);
+  }
+
+  // ============================================================
+  //  Route planner + live map (Leaflet over OpenStreetMap).
+  //  Real routing: you type any place, the backend geocodes it
+  //  (Nominatim) and finds the real road route (OSRM), which we
+  //  trace on the map with real distance / time / cost estimate.
+  // ============================================================
+
+  let routeMap = null;          // the Leaflet map, created lazily
+  let routeLayer = null;        // holds the current markers + line
+  let meMarker = null;          // "you are here"
+
+  // The place the user actually picked from each suggestion list.
+  // null means "they typed something but haven't picked" - we then
+  // let the backend geocode the raw text on submit.
+  const picked = { source: null, destination: null };
+  const suggestTimers = { source: null, destination: null };
+
+  // Leaflet needs its container to have a real size, which only happens
+  // once the Route screen is visible - so we build the map the first
+  // time the tab opens, not on page load.
+  function ensureMap() {
+    if (routeMap) { setTimeout(() => routeMap.invalidateSize(), 60); return; }
+    routeMap = L.map('route-map', { zoomControl: true, attributionControl: true })
+                .setView([22.5, 79.0], 4.6);  // roughly centred on India
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap',
+    }).addTo(routeMap);
+    routeLayer = L.layerGroup().addTo(routeMap);
+    setTimeout(() => routeMap.invalidateSize(), 60);
+  }
+
+  // ---- Autocomplete: debounce keystrokes, then query /geocode ----
+  function onPlaceInput(which) {
+    picked[which] = null; // typing invalidates any earlier pick
+    const input = document.getElementById(which + "-input");
+    const box = document.getElementById(which + "-suggest");
+    const q = input.value.trim();
+    if (q.length < 2) { box.classList.remove("open"); box.innerHTML = ""; return; }
+
+    clearTimeout(suggestTimers[which]);
+    suggestTimers[which] = setTimeout(() => fetchSuggestions(which, q), 300);
+  }
+
+  async function fetchSuggestions(which, q) {
+    const box = document.getElementById(which + "-suggest");
+    try {
+      const res = await fetch("/api/routes/geocode?q=" + encodeURIComponent(q));
+      const places = await res.json();
+      if (!Array.isArray(places) || !places.length) {
+        box.innerHTML = '<div class="ps-empty">No matches.</div>';
+        box.classList.add("open");
+        return;
+      }
+      box.innerHTML = "";
+      places.forEach(p => {
+        const item = document.createElement("div");
+        item.className = "ps-item";
+        item.textContent = p.display_name;
+        item.title = p.display_name;
+        item.onclick = () => choosePlace(which, p);
+        box.appendChild(item);
+      });
+      box.classList.add("open");
+    } catch (e) {
+      box.innerHTML = '<div class="ps-empty">Search failed.</div>';
+      box.classList.add("open");
+    }
+  }
+
+  function choosePlace(which, place) {
+    picked[which] = place;
+    const input = document.getElementById(which + "-input");
+    // Show a short label, keep the full match in `picked`.
+    input.value = place.display_name.split(",").slice(0, 2).join(",").trim();
+    const box = document.getElementById(which + "-suggest");
+    box.classList.remove("open"); box.innerHTML = "";
+  }
+
+  function swapPlaces() {
+    const s = document.getElementById("source-input");
+    const d = document.getElementById("destination-input");
+    [s.value, d.value] = [d.value, s.value];
+    [picked.source, picked.destination] = [picked.destination, picked.source];
+  }
+
+  async function showPath() {
+    const s = document.getElementById('source-input').value.trim();
+    const d = document.getElementById('destination-input').value.trim();
+    const el = document.getElementById('route-result');
+    document.getElementById('source-suggest').classList.remove('open');
+    document.getElementById('destination-suggest').classList.remove('open');
+
+    if (!s || !d) { el.textContent = "Type a start and a destination."; return; }
+    el.textContent = "Finding the real road route…";
+
+    // Prefer exact picked coordinates; fall back to letting the backend
+    // geocode the typed text.
+    const params = new URLSearchParams({ source: s, destination: d });
+    if (picked.source) { params.set("src_lat", picked.source.lat); params.set("src_lng", picked.source.lng); }
+    if (picked.destination) { params.set("dst_lat", picked.destination.lat); params.set("dst_lng", picked.destination.lng); }
+
+    try {
+      const res = await fetch("/api/routes/path?" + params.toString());
+      const data = await res.json();
+      if (!res.ok) { el.textContent = data.detail || "No route found."; return; }
+
+      el.textContent =
+        `${data.source.name}  →  ${data.destination.name}\n` +
+        `🛣️ ${data.distance_km.toLocaleString()} km   ·   🕒 ${data.duration_text}   ·   ` +
+        `⛽ ~₹${data.cost_est_inr.toLocaleString()} (est.)`;
+      drawRoute(data);
+    } catch (e) {
+      el.textContent = "Couldn't reach the route service.";
+    }
+  }
+
+  function drawRoute(data) {
+    ensureMap();
+    routeLayer.clearLayers();
+
+    // The real road line (many points following actual roads).
+    const line = data.coordinates || [];
+    if (line.length > 1) {
+      L.polyline(line, { color: "#38bdf8", weight: 5, opacity: .9 }).addTo(routeLayer);
+    }
+
+    const start = [data.source.lat, data.source.lng];
+    const end = [data.destination.lat, data.destination.lng];
+    L.circleMarker(start, { radius: 9, color: "#34d399", weight: 3, fillColor: "#34d399", fillOpacity: 1 })
+      .bindPopup(`<b>${data.source.name}</b> — start`).addTo(routeLayer);
+    L.circleMarker(end, { radius: 9, color: "#f472b6", weight: 3, fillColor: "#f472b6", fillOpacity: 1 })
+      .bindPopup(`<b>${data.destination.name}</b> — destination`).addTo(routeLayer);
+
+    const bounds = line.length > 1 ? line : [start, end];
+    routeMap.fitBounds(bounds, { padding: [40, 40] });
+  }
+
+  function locateMe() {
+    const el = document.getElementById('route-result');
+    if (!navigator.geolocation) { el.textContent = "Location isn't available in this browser."; return; }
+    el.textContent = "Getting your location…";
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        ensureMap();
+        const latlng = [pos.coords.latitude, pos.coords.longitude];
+        if (meMarker) routeMap.removeLayer(meMarker);
+        meMarker = L.circleMarker(latlng, {
+          radius: 8, color: "#34d399", weight: 3, fillColor: "#34d399", fillOpacity: .9,
+        }).bindPopup("You are here").addTo(routeMap);
+        routeMap.setView(latlng, 11);
+        meMarker.openPopup();
+        // Seed the FROM field with the user's live position.
+        picked.source = { name: "My location", display_name: "My location", lat: latlng[0], lng: latlng[1] };
+        document.getElementById("source-input").value = "My location";
+        el.textContent = "📍 That green dot is you, set as your start. Now type a destination and Find route.";
+      },
+      () => { el.textContent = "Couldn't get your location (permission denied?)."; },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
+
+  // Close suggestion lists when clicking elsewhere.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".place-field")) {
+      document.querySelectorAll(".place-suggest").forEach(b => b.classList.remove("open"));
+    }
+  });
+
+
+  // ------------------------------------------------------------
+  // Auth: talks to /api/auth/*, stores JWT in memory + localStorage,
+  // shows the app only once logged in.
+  // ------------------------------------------------------------
+  const API = ""; // same origin; FastAPI serves this page
+  let authMode = "login"; // or "signup"
+  let token = localStorage.getItem("tt_token") || null;
+
+  function toggleAuthMode() {
+    authMode = authMode === "login" ? "signup" : "login";
+    document.getElementById("auth-heading").textContent = authMode === "login" ? "Log in" : "Create account";
+    document.getElementById("auth-submit").textContent = authMode === "login" ? "Log in" : "Sign up";
+    document.getElementById("auth-toggle").innerHTML = authMode === "login"
+      ? 'New here? <a onclick="toggleAuthMode()">Create an account</a>'
+      : 'Have an account? <a onclick="toggleAuthMode()">Log in</a>';
+    // Username is only needed when creating an account.
+    document.getElementById("auth-name").style.display = authMode === "signup" ? "block" : "none";
+    document.getElementById("auth-error").textContent = "";
+  }
+
+  async function submitAuth() {
+    const name = document.getElementById("auth-name").value.trim();
+    const email = document.getElementById("auth-email").value.trim();
+    const password = document.getElementById("auth-password").value;
+    const errEl = document.getElementById("auth-error");
+    errEl.textContent = "";
+
+    if (!email || !password) { errEl.textContent = "Enter an email and password."; return; }
+    if (authMode === "signup" && !name) { errEl.textContent = "Pick a username."; return; }
+
+    const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/signup";
+    const payload = authMode === "signup" ? { name, email, password } : { email, password };
+    try {
+      const res = await fetch(API + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) { errEl.textContent = data.detail || "Something went wrong."; return; }
+      token = data.access_token;
+      localStorage.setItem("tt_token", token);
+      showApp();
+    } catch (e) {
+      errEl.textContent = "Could not reach the server.";
+    }
+  }
+
+  function showApp() {
+    document.getElementById("auth-overlay").classList.add("hidden");
+    // personalise welcome using the email's first part
+    fetch("/api/auth/me", { headers: { Authorization: "Bearer " + token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(u => {
+        if (u) {
+          const nick = u.name || (u.email ? u.email.split("@")[0] : "traveller");
+          const el = document.getElementById("welcome-name");
+          if (el) el.textContent = "Welcome, " + nick + " 👋";
+        }
+      }).catch(() => {});
+    navigate("home");
+  }
+
+  function logout() {
+    token = null;
+    localStorage.removeItem("tt_token");
+    // Reset the login form back to a clean "Log in" state.
+    authMode = "login";
+    document.getElementById("auth-heading").textContent = "Log in";
+    document.getElementById("auth-submit").textContent = "Log in";
+    document.getElementById("auth-name").style.display = "none";
+    ["auth-name", "auth-email", "auth-password"].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = "";
+    });
+    // Wipe Trippy's on-screen conversation so the next user starts fresh.
+    if (typeof chatReset === "function") { try { chatReset(); } catch (e) {} }
+    chatStatusChecked = false;
+    document.getElementById("auth-overlay").classList.remove("hidden");
+  }
+
+  // On load: if we already have a token, verify it before skipping login.
+  async function checkExistingSession() {
+    if (!token) return;
+    try {
+      const res = await fetch(API + "/api/auth/me", { headers: { Authorization: "Bearer " + token } });
+      if (res.ok) showApp();
+      else logout();
+    } catch (e) { /* stay on login screen */ }
+  }
+  checkExistingSession();
+
+
+  // ------------------------------------------------------------
+  // Trip / itinerary screen. Talks to /api/trips/*, always sends
+  // the JWT. Two views inside one screen: the trip LIST, and an
+  // OPEN trip (its days + activities). openTripId tracks which.
+  // ------------------------------------------------------------
+  let openTripId = null;
+
+  function authHeaders() {
+    return { "Content-Type": "application/json", "Authorization": "Bearer " + token };
+  }
+
+  async function apiTrips(method, path, body) {
+    const res = await fetch("/api/trips" + path, {
+      method,
+      headers: authHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const data = res.status === 200 ? await res.json() : await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Request failed");
+    return data;
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  async function renderTripList() {
+    openTripId = null;
+    document.getElementById("trip-title").textContent = "Your trips";
+    const body = document.getElementById("trip-body");
+    body.innerHTML = '<div class="trip-error" id="trip-error"></div>' +
+      '<div id="trip-list-container"><p class="act-empty">Loading...</p></div>' +
+      '<div class="trip-section-label">Create a new trip</div>' +
+      '<input class="trip-input" id="new-trip-name" placeholder="Trip name (e.g. Goa Getaway)">' +
+      '<div class="row2" style="display:flex;gap:8px">' +
+        '<input class="trip-input" id="new-trip-start" type="date">' +
+        '<input class="trip-input" id="new-trip-end" type="date">' +
+      '</div>' +
+      '<button class="trip-btn" onclick="createTrip()">Create trip</button>';
+
+    // Block past dates: earliest selectable is today.
+    const _today = new Date().toISOString().split('T')[0];
+    const _s = document.getElementById('new-trip-start');
+    const _e = document.getElementById('new-trip-end');
+    if (_s && _e) {
+      _s.min = _today;
+      _e.min = _today;
+      _s.addEventListener('change', () => {
+        _e.min = _s.value || _today;
+        if (_e.value && _e.value < _s.value) _e.value = _s.value;
+      });
+    }
+
+    try {
+      const trips = await apiTrips("GET", "");
+      const c = document.getElementById("trip-list-container");
+      if (!trips.length) {
+        c.innerHTML = '<p class="act-empty">No trips yet. Create one below.</p>';
+      } else {
+        c.innerHTML = trips.map(t =>
+          `<div class="trip-list-item" onclick="openTrip(${t.id})">
+             <div class="t-name">${esc(t.name)}</div>
+             <div class="t-meta">${esc(t.start_date)} → ${esc(t.end_date)} · ${t.day_count} day(s)</div>
+           </div>`).join("");
+      }
+    } catch (e) {
+      document.getElementById("trip-error").textContent = e.message;
+    }
+  }
+
+  async function createTrip() {
+    const name = document.getElementById("new-trip-name").value.trim();
+    const start = document.getElementById("new-trip-start").value;
+    const end = document.getElementById("new-trip-end").value;
+    const errEl = document.getElementById("trip-error");
+    errEl.textContent = "";
+    if (!name || !start || !end) { errEl.textContent = "Fill in name, start and end dates."; return; }
+    try {
+      const trip = await apiTrips("POST", "", { name, start_date: start, end_date: end });
+      openTrip(trip.id);
+    } catch (e) { errEl.textContent = e.message; }
+  }
+
+  async function openTrip(id) {
+    try {
+      const trip = await apiTrips("GET", "/" + id);
+      openTripId = id;
+      renderOpenTrip(trip);
+    } catch (e) {
+      renderTripList();
+    }
+  }
+
+  function renderOpenTrip(trip) {
+    document.getElementById("trip-title").textContent = trip.name;
+    const body = document.getElementById("trip-body");
+
+    const daysHtml = trip.days.map(d => {
+      const acts = d.activities.length
+        ? d.activities.map(a =>
+            `<div class="act-row">
+               <div><div class="a-name">${esc(a.name)}</div>
+               <div class="a-meta">${a.duration} hrs · Rs.${a.cost}</div></div>
+               <div style="display:flex;align-items:center;gap:6px">
+                 <select class="move-sel" title="Move to day" onchange="moveActivity(${trip.id}, ${a.id}, this.value)">
+                   <option value="">Move…</option>
+                   ${trip.days.map(dd => `<option value="${dd.day_number}"${dd.day_number===d.day_number?' disabled':''}>Day ${dd.day_number}</option>`).join("")}
+                 </select>
+                 <button class="a-del" title="Remove" onclick="removeActivity(${trip.id}, ${a.id})">✕</button>
+               </div>
+             </div>`).join("")
+        : '<div class="act-empty">No activities yet.</div>';
+      return `<div class="day-card">
+                <div class="d-head">Day ${d.day_number} · ${esc(d.date)}</div>
+                ${acts}
+                <div class="add-act-box">
+                  <input class="trip-input" id="act-name-${d.day_number}" placeholder="Add activity">
+                  <div class="row2">
+                    <input class="trip-input" id="act-dur-${d.day_number}" type="number" placeholder="Hours" step="0.5" min="0">
+                    <input class="trip-input" id="act-cost-${d.day_number}" type="number" placeholder="Cost" min="0">
+                  </div>
+                  <button class="trip-btn" onclick="addActivity(${trip.id}, ${d.day_number})">Add to Day ${d.day_number}</button>
+                </div>
+              </div>`;
+    }).join("");
+
+    body.innerHTML =
+      '<button class="trip-btn ghost" onclick="renderTripList()">← All trips</button>' +
+      `<div class="t-meta" style="color:var(--text-secondary);font-size:12px;margin:10px 2px">${esc(trip.start_date)} → ${esc(trip.end_date)}</div>` +
+      '<div class="trip-totals">' +
+        `<div class="tot"><div class="lbl">Total cost</div><div class="val">Rs.${trip.total_cost}</div></div>` +
+        `<div class="tot"><div class="lbl">Total time</div><div class="val">${trip.total_duration} hrs</div></div>` +
+      '</div>' +
+      '<div class="trip-error" id="trip-error"></div>' +
+      daysHtml +
+      '<button class="trip-btn ghost" style="margin-top:6px;color:#f87171;border-color:#3a2020" onclick="deleteTrip(' + trip.id + ')">Delete this trip</button>';
+  }
+
+  async function addActivity(tripId, dayNumber) {
+    const name = document.getElementById("act-name-" + dayNumber).value.trim();
+    const dur = parseFloat(document.getElementById("act-dur-" + dayNumber).value) || 0;
+    const cost = parseFloat(document.getElementById("act-cost-" + dayNumber).value) || 0;
+    const errEl = document.getElementById("trip-error");
+    errEl.textContent = "";
+    if (!name) { errEl.textContent = "Enter an activity name."; return; }
+    try {
+      const trip = await apiTrips("POST", `/${tripId}/days/${dayNumber}/activities`, { name, duration: dur, cost });
+      renderOpenTrip(trip);
+    } catch (e) { errEl.textContent = e.message; }
+  }
+
+  async function moveActivity(tripId, activityId, toDay) {
+    if (!toDay) return;
+    try {
+      const trip = await apiTrips("PUT", `/${tripId}/activities/${activityId}/move/${toDay}`);
+      renderOpenTrip(trip);
+    } catch (e) { /* ignore */ }
+  }
+
+  async function removeActivity(tripId, activityId) {
+    try {
+      const trip = await apiTrips("DELETE", `/${tripId}/activities/${activityId}`);
+      renderOpenTrip(trip);
+    } catch (e) { /* ignore */ }
+  }
+
+  async function deleteTrip(tripId) {
+    try {
+      await apiTrips("DELETE", "/" + tripId);
+      renderTripList();
+    } catch (e) { /* ignore */ }
+  }
+
+  // Load the trip list whenever the user navigates to the Trip tab.
+  const _origNavigate = navigate;
+  navigate = function(name) {
+    _origNavigate(name);
+    if (name === "trip" && token) renderTripList();
+  };
+
+
+  // ------------------------------------------------------------
+  // Activities screen: browse/sort, budget optimiser, scheduler.
+  // Calls /api/activities/*. City list loads once on first visit.
+  // ------------------------------------------------------------
+  let actMode = "browse";
+  let actCitiesLoaded = false;
+
+  async function loadActCities() {
+    // These just seed the suggestion list; you can type any city at all.
+    try {
+      const res = await fetch("/api/activities/cities");
+      const cities = await res.json();
+      const dl = document.getElementById("act-city-list");
+      dl.innerHTML = cities.map(c => `<option value="${esc(c)}"></option>`).join("");
+    } catch (e) { /* suggestions are optional */ }
+    actCitiesLoaded = true;
+    renderActControls();
+  }
+
+  function setActMode(mode) {
+    actMode = mode;
+    document.querySelectorAll(".act-mode").forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === mode));
+    document.getElementById("act-results").innerHTML = "";
+    document.getElementById("act-error").textContent = "";
+    renderActControls();
+  }
+
+  function renderActControls() {
+    const c = document.getElementById("act-controls");
+    if (actMode === "browse") {
+      c.innerHTML =
+        '<div class="field-label">SORT BY</div>' +
+        '<select class="act-input" id="act-sort">' +
+          '<option value="rating">Rating (high to low)</option>' +
+          '<option value="cost">Cost (low to high)</option>' +
+          '<option value="duration">Duration (short to long)</option>' +
+        '</select>' +
+        '<button class="act-run" onclick="runBrowse()">Show activities</button>';
+    } else if (actMode === "filter") {
+      c.innerHTML =
+        '<div class="field-label">MAX COST (Rs.) — optional</div>' +
+        '<input class="act-input" id="flt-cost" type="number" min="0" placeholder="e.g. 100">' +
+        '<div class="field-label">MIN RATING — optional</div>' +
+        '<input class="act-input" id="flt-rating" type="number" min="0" max="5" step="0.1" placeholder="e.g. 4.5">' +
+        '<div class="field-label">MAX DURATION (hrs) — optional</div>' +
+        '<input class="act-input" id="flt-dur" type="number" min="0" step="0.5" placeholder="e.g. 3">' +
+        '<button class="act-run" onclick="runFilter()">Apply filters</button>';
+    } else if (actMode === "budget") {
+      c.innerHTML =
+        '<div class="field-label">MAX BUDGET (Rs.)</div>' +
+        '<input class="act-input" id="act-budget" type="number" min="0" placeholder="e.g. 100">' +
+        '<button class="act-run" onclick="runBudget()">Optimise for budget</button>';
+    } else {
+      c.innerHTML =
+        '<div class="field-label">MAX TIME (hrs)</div>' +
+        '<input class="act-input" id="act-hours" type="number" min="0" step="0.5" placeholder="e.g. 6">' +
+        '<div class="field-label">MAX BUDGET (Rs.)</div>' +
+        '<input class="act-input" id="act-sbudget" type="number" min="0" placeholder="e.g. 100">' +
+        '<button class="act-run" onclick="runSchedule()">Build schedule</button>';
+    }
+  }
+
+  function actCard(a) {
+    return `<div class="act-card">
+      <div class="ac-name">${esc(a.name)}</div>
+      <div class="ac-meta">★ ${a.rating} · Rs.${a.cost} · ${a.duration} hrs · ${esc(a.category)}</div>
+    </div>`;
+  }
+
+  function city() { return document.getElementById("act-city").value.trim(); }
+  function actErr(m) { document.getElementById("act-error").textContent = m; }
+
+  // Guard empty city + show a loading note (generating a new city via AI
+  // takes a few seconds the first time). Returns false to abort the run.
+  function actBegin() {
+    actErr("");
+    if (!city()) { actErr("Type a city first."); return false; }
+    document.getElementById("act-results").innerHTML =
+      '<p class="act-empty">Finding activities for ' + esc(city()) +
+      '… (first time for a new city may take a few seconds while Trippy builds the list)</p>';
+    return true;
+  }
+
+  async function runFilter() {
+    if (!actBegin()) return;
+    const params = new URLSearchParams({ city: city() });
+    const mc = document.getElementById("flt-cost").value;
+    const mr = document.getElementById("flt-rating").value;
+    const md = document.getElementById("flt-dur").value;
+    if (mc !== "") params.set("max_cost", mc);
+    if (mr !== "") params.set("min_rating", mr);
+    if (md !== "") params.set("max_duration", md);
+    try {
+      const res = await fetch("/api/activities/filter?" + params.toString());
+      const data = await res.json();
+      if (!res.ok) { actErr(data.detail || "Failed"); return; }
+      const results = document.getElementById("act-results");
+      results.innerHTML = data.length ? data.map(actCard).join("") : '<p class="act-empty">Nothing matches those filters.</p>';
+    } catch (e) { actErr("Request failed."); }
+  }
+
+  async function runBrowse() {
+    if (!actBegin()) return;
+    const sort = document.getElementById("act-sort").value;
+    try {
+      const res = await fetch(`/api/activities?city=${encodeURIComponent(city())}&sort=${sort}`);
+      const data = await res.json();
+      if (!res.ok) { actErr(data.detail || "Failed"); return; }
+      document.getElementById("act-results").innerHTML = data.map(actCard).join("");
+    } catch (e) { actErr("Request failed."); }
+  }
+
+  function summaryBar(r) {
+    return '<div class="act-summary">' +
+      `<div class="s"><div class="l">Cost</div><div class="v">Rs.${r.total_cost}</div></div>` +
+      `<div class="s"><div class="l">Rating</div><div class="v">${r.total_rating}</div></div>` +
+      `<div class="s"><div class="l">Time</div><div class="v">${r.total_duration}h</div></div>` +
+    '</div>';
+  }
+
+  async function runBudget() {
+    const b = document.getElementById("act-budget").value;
+    if (b === "") { actErr("Enter a budget."); return; }
+    if (!actBegin()) return;
+    try {
+      const res = await fetch(`/api/activities/optimize/budget?city=${encodeURIComponent(city())}&max_budget=${b}`);
+      const data = await res.json();
+      if (!res.ok) { actErr(data.detail || "Failed"); return; }
+      const results = document.getElementById("act-results");
+      results.innerHTML = data.activities.length
+        ? summaryBar(data) + data.activities.map(actCard).join("")
+        : '<p class="act-empty">Nothing fits this budget.</p>';
+    } catch (e) { actErr("Request failed."); }
+  }
+
+  async function runSchedule() {
+    const h = document.getElementById("act-hours").value;
+    const b = document.getElementById("act-sbudget").value;
+    if (h === "" || b === "") { actErr("Enter both time and budget."); return; }
+    if (!actBegin()) return;
+    try {
+      const res = await fetch(`/api/activities/optimize/schedule?city=${encodeURIComponent(city())}&max_hours=${h}&max_budget=${b}`);
+      const data = await res.json();
+      if (!res.ok) { actErr(data.detail || "Failed"); return; }
+      const results = document.getElementById("act-results");
+      results.innerHTML = data.activities.length
+        ? summaryBar(data) + data.activities.map(actCard).join("")
+        : '<p class="act-empty">No combination fits those limits.</p>';
+    } catch (e) { actErr("Request failed."); }
+  }
+
+  // hook navigation to load cities on first Activities visit
+  const _navBeforeAct = navigate;
+  navigate = function(name) {
+    _navBeforeAct(name);
+    if (name === "activities" && !actCitiesLoaded) loadActCities();
+  };
+
+
+  // ------------------------------------------------------------
+  // Music screen: search (prefix autocomplete + KMP full-text) and
+  // playlist (mood/genre filtered, rating-ranked). /api/music/*.
+  // ------------------------------------------------------------
+  let musMode = "search";
+  let musFiltersLoaded = false;
+  let musFilters = { moods: [], genres: [] };
+
+  async function loadMusFilters() {
+    try {
+      const res = await fetch("/api/music/filters");
+      musFilters = await res.json();
+      musFiltersLoaded = true;
+    } catch (e) { /* ignore */ }
+    renderMusControls();
+  }
+
+  function setMusMode(mode) {
+    musMode = mode;
+    document.querySelectorAll(".mus-mode").forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === mode));
+    document.getElementById("mus-results").innerHTML = "";
+    document.getElementById("mus-error").textContent = "";
+    renderMusControls();
+  }
+
+  function renderMusControls() {
+    const c = document.getElementById("mus-controls");
+    if (musMode === "played") {
+      c.innerHTML = "";
+      loadMostPlayed();
+      return;
+    }
+    if (musMode === "search") {
+      c.innerHTML =
+        '<input class="mus-input" id="mus-q" placeholder="Search song or artist..." oninput="onMusType()">' +
+        '<div class="mus-count" id="mus-hint">Type to search the full library of songs.</div>';
+      onMusSearchAll();
+    } else {
+      const moodOpts = '<option value="">Any mood</option>' +
+        musFilters.moods.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+      const genreOpts = '<option value="">Any genre</option>' +
+        musFilters.genres.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
+      c.innerHTML =
+        '<div class="field-label">MOOD</div><select class="mus-select" id="mus-mood">' + moodOpts + '</select>' +
+        '<div class="field-label">GENRE</div><select class="mus-select" id="mus-genre">' + genreOpts + '</select>' +
+        '<div class="field-label">TRIP LENGTH (MINUTES)</div>' +
+        '<input class="mus-input" id="mus-min" type="number" min="1" value="60">' +
+        '<button class="mus-run" onclick="runPlaylist()">Generate playlist</button>';
+    }
+  }
+
+  function songCard(s) {
+    return `<div class="song-card">
+      <div><div class="s-name">${esc(s.name)}</div>
+      <div class="s-meta">${esc(s.artist)} · ${esc(s.mood)} · ${esc(s.genre)}</div></div>
+      <div class="s-actions">
+        <div class="s-rate">★ ${s.rating}</div>
+        <span class="play-count" id="pc-${s.id}"></span>
+        <button class="play-btn" title="Play" onclick="playSong(${s.id})">▶</button>
+      </div>
+    </div>`;
+  }
+
+  async function playSong(songId) {
+    try {
+      const res = await fetch("/api/frequency/play/" + songId, {
+        method: "POST", headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const badge = document.getElementById("pc-" + songId);
+        if (badge) badge.textContent = data.count + "\u25B6";
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  async function loadMostPlayed() {
+    const results = document.getElementById("mus-results");
+    try {
+      const res = await fetch("/api/frequency/most-played?limit=20", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await res.json();
+      if (!data.length) {
+        results.innerHTML = '<p class="act-empty">No plays yet. Hit ▶ on songs in Search to track them.</p>';
+        return;
+      }
+      results.innerHTML =
+        '<button class="mus-reset" onclick="resetPlays()">Reset all play counts</button>' +
+        data.map((s, i) =>
+          `<div class="song-card">
+             <div><div class="s-name">${i+1}. ${esc(s.name)}</div>
+             <div class="s-meta">${esc(s.artist)}</div></div>
+             <div class="s-rate">${s.count} play(s)</div>
+           </div>`).join("");
+    } catch (e) { results.innerHTML = '<p class="act-empty">Could not load.</p>'; }
+  }
+
+  async function resetPlays() {
+    try {
+      await fetch("/api/frequency/reset", { method: "DELETE", headers: { "Authorization": "Bearer " + token } });
+      loadMostPlayed();
+    } catch (e) {}
+  }
+
+  let musTypeTimer = null;
+  function onMusType() {
+    clearTimeout(musTypeTimer);
+    musTypeTimer = setTimeout(runMusSearch, 220); // debounce
+  }
+
+  async function onMusSearchAll() {
+    try {
+      const res = await fetch("/api/music/search?q=");
+      const data = await res.json();
+      renderSongs(data, `${data.length} songs`);
+    } catch (e) {}
+  }
+
+  async function runMusSearch() {
+    const q = document.getElementById("mus-q").value.trim();
+    try {
+      // prefix autocomplete first; if nothing, fall back to full-text
+      let data = [];
+      if (q) {
+        const ac = await (await fetch("/api/music/autocomplete?prefix=" + encodeURIComponent(q) + "&limit=50")).json();
+        data = ac.length ? ac : await (await fetch("/api/music/search?q=" + encodeURIComponent(q))).json();
+      } else {
+        data = await (await fetch("/api/music/search?q=")).json();
+      }
+      renderSongs(data, `${data.length} result(s)`);
+    } catch (e) { document.getElementById("mus-error").textContent = "Search failed."; }
+  }
+
+  function renderSongs(songs, countText) {
+    document.getElementById("mus-results").innerHTML =
+      (countText ? `<div class="mus-count">${countText}</div>` : "") +
+      (songs.length ? songs.map(songCard).join("") : '<p class="act-empty">No songs found.</p>');
+  }
+
+  let currentPlaylist = [];
+
+  async function runPlaylist() {
+    const mood = document.getElementById("mus-mood").value;
+    const genre = document.getElementById("mus-genre").value;
+    const minutes = document.getElementById("mus-min").value || 60;
+    document.getElementById("mus-error").textContent = "";
+    try {
+      const res = await fetch(`/api/music/playlist?mood=${encodeURIComponent(mood)}&genre=${encodeURIComponent(genre)}&minutes=${minutes}`);
+      const data = await res.json();
+      currentPlaylist = data.songs || [];
+      renderPlaylist();
+    } catch (e) { document.getElementById("mus-error").textContent = "Could not build playlist."; }
+  }
+
+  function renderPlaylist() {
+    const results = document.getElementById("mus-results");
+    if (!currentPlaylist.length) {
+      results.innerHTML = '<p class="act-empty">No songs match those filters.</p>';
+      return;
+    }
+    results.innerHTML =
+      `<div class="mus-count">${currentPlaylist.length}-song playlist</div>` +
+      '<button class="mus-run" style="margin-bottom:10px" onclick="shufflePlaylist()">🔀 Shuffle</button>' +
+      currentPlaylist.map(playlistCard).join("");
+  }
+
+  function playlistCard(s) {
+    return `<div class="song-card">
+      <div><div class="s-name">${esc(s.name)}</div>
+      <div class="s-meta">${esc(s.artist)} · ${esc(s.mood)} · ${esc(s.genre)}</div></div>
+      <div class="s-actions"><div class="s-rate">★ ${s.rating}</div>
+      <button class="play-btn" title="Remove" onclick="removeFromPlaylist(${s.id})">✕</button></div>
+    </div>`;
+  }
+
+  function shufflePlaylist() {
+    for (let i = currentPlaylist.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [currentPlaylist[i], currentPlaylist[j]] = [currentPlaylist[j], currentPlaylist[i]];
+    }
+    renderPlaylist();
+  }
+
+  function removeFromPlaylist(songId) {
+    currentPlaylist = currentPlaylist.filter(s => s.id !== songId);
+    renderPlaylist();
+  }
+
+  const _navBeforeMus = navigate;
+  navigate = function(name) {
+    _navBeforeMus(name);
+    if (name === "music") {
+      if (!musFiltersLoaded) loadMusFilters();
+      else renderMusControls();
+    }
+  };
+
+  // ================================================================
+  //  AI assistant
+  //  Talks to /api/chat. The JWT is sent when we have one, which
+  //  unlocks the trip tools; without it the assistant still answers
+  //  route, activity and music questions, just can't save anything.
+  // ================================================================
+
+  let chatBusy = false;
+  let chatStatusChecked = false;
+
+  // A stable per-browser id so anonymous chat history stays private to
+  // this browser instead of being shared across all logged-out visitors.
+  function anonId() {
+    let id = localStorage.getItem("tt_anon");
+    if (!id) {
+      id = "a-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem("tt_anon", id);
+    }
+    return id;
+  }
+
+  function chatLog() { return document.getElementById("chat-log"); }
+
+  function chatClearEmpty() {
+    const empty = chatLog().querySelector(".chat-empty");
+    if (empty) empty.remove();
+  }
+
+  function chatAdd(text, kind, tools) {
+    chatClearEmpty();
+    const el = document.createElement("div");
+    el.className = "msg " + kind;
+    el.textContent = text;
+    if (tools && tools.length) {
+      const row = document.createElement("div");
+      row.className = "msg-tools";
+      tools.forEach(t => {
+        const tag = document.createElement("span");
+        tag.className = "msg-tool";
+        tag.textContent = t.replace(/_/g, " ");
+        row.appendChild(tag);
+      });
+      el.appendChild(row);
+    }
+    const log = chatLog();
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  function chatTyping() {
+    chatClearEmpty();
+    const el = document.createElement("div");
+    el.className = "msg bot typing";
+    el.innerHTML = "<span></span><span></span><span></span>";
+    const log = chatLog();
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  function chatGrow(el) {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 110) + "px";
+  }
+
+  function chatKey(e) {
+    // Enter sends, Shift+Enter makes a new line.
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); }
+  }
+
+  function chatSuggest(btn) {
+    const input = document.getElementById("chat-input");
+    input.value = btn.textContent.trim();
+    chatSend();
+  }
+
+  async function chatSend() {
+    const input = document.getElementById("chat-input");
+    const text = input.value.trim();
+    if (!text || chatBusy) return;
+
+    chatBusy = true;
+    document.getElementById("chat-send").disabled = true;
+    input.value = "";
+    input.style.height = "auto";
+
+    chatAdd(text, "user");
+    const typing = chatTyping();
+
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      else headers["X-Anon-Id"] = anonId();
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({ message: text })
+      });
+      const data = await res.json();
+      typing.remove();
+
+      if (!res.ok) {
+        chatAdd(data.detail || "Something went wrong. Please try again.", "error");
+      } else {
+        chatAdd(data.reply, "bot", data.tools_used);
+      }
+    } catch (err) {
+      typing.remove();
+      chatAdd("Couldn't reach the server. Is the backend running?", "error");
+    } finally {
+      chatBusy = false;
+      document.getElementById("chat-send").disabled = false;
+      input.focus();
+    }
+  }
+
+  async function chatReset() {
+    try {
+      const headers = {};
+      if (token) headers["Authorization"] = "Bearer " + token;
+      else headers["X-Anon-Id"] = anonId();
+      await fetch("/api/chat/history", { method: "DELETE", headers: headers });
+    } catch (err) { /* clearing the screen is the part that matters */ }
+
+    const face =
+      '<div class="trippy-face big"><div class="trippy-ear l"></div><div class="trippy-ear r"></div>' +
+      '<div class="trippy-eye l"></div><div class="trippy-eye r"></div><div class="trippy-smile"></div></div>';
+    chatLog().innerHTML =
+      '<div class="chat-empty">' + face +
+      '<p class="chat-hello">Hi, I\'m Trippy! ✨</p>' +
+      '<p class="subtitle" style="text-align:center;">I plan trips and build playlists using your real TripTunes data. Try one of these:</p>' +
+      '<div class="chat-chips">' +
+      '<button class="chip" onclick="chatSuggest(this)">🗺️ Plan a day in Jaipur, 6 hours and 300 rupees</button>' +
+      '<button class="chip" onclick="chatSuggest(this)">🚕 Cheapest way from Delhi to Goa</button>' +
+      '<button class="chip" onclick="chatSuggest(this)">🎧 Playlist for a 3 hour drive</button>' +
+      '<button class="chip" onclick="chatSuggest(this)">⭐ What can I do in Agra?</button>' +
+      '</div></div>';
+  }
+
+  // Check the model is configured before the user's first message, so a
+  // missing API key shows as a clear setup note instead of a failed send.
+  async function chatCheckStatus() {
+    if (chatStatusChecked) return;
+    chatStatusChecked = true;
+    const banner = document.getElementById("chat-setup");
+    try {
+      const res = await fetch("/api/chat/status");
+      const data = await res.json();
+      if (!data.ready) {
+        banner.style.display = "block";
+        banner.textContent = "AI not configured (" + data.provider + "): " + data.reason;
+      } else {
+        banner.style.display = "none";
+      }
+    } catch (err) {
+      banner.style.display = "block";
+      banner.textContent = "Couldn't reach the chat service. Is the backend running?";
+    }
+  }
+
+  const _navBeforeAI = navigate;
+  navigate = function(name) {
+    _navBeforeAI(name);
+    if (name === "ai") {
+      chatCheckStatus();
+      const input = document.getElementById("chat-input");
+      if (input) setTimeout(() => input.focus(), 220);
+    }
+    if (name === "route") {
+      // Build/refresh the map once the screen is actually on-screen.
+      setTimeout(ensureMap, 60);
+    }
+  };
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js').catch(()=>{}));
+  }
+</script>
+
+</body>
+</html>
